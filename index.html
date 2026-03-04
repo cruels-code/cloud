@@ -1,0 +1,460 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CS2 Volumetric Smoke Simulation</title>
+    <style>
+        body { 
+            margin: 0; 
+            overflow: hidden; 
+            background-color: #000000; 
+            color: white; 
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; 
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+        }
+        #ui { 
+            position: absolute; 
+            top: 20px; 
+            left: 20px; 
+            z-index: 10; 
+            background: rgba(15, 23, 42, 0.8); 
+            padding: 20px; 
+            border-radius: 12px; 
+            border: 1px solid rgba(255,255,255,0.1); 
+            max-width: 320px; 
+            backdrop-filter: blur(12px);
+            transition: transform 0.4s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.4s ease;
+            color: #fff;
+            box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.3);
+            max-height: 85vh;
+            overflow-y: auto;
+        }
+        #ui::-webkit-scrollbar { width: 4px; }
+        #ui::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.2); border-radius: 2px; }
+        
+        .control-group { margin-bottom: 16px; }
+        .control-label { 
+            display: flex; 
+            justify-content: space-between; 
+            font-size: 0.75rem; 
+            text-transform: uppercase; 
+            letter-spacing: 0.05em; 
+            margin-bottom: 6px;
+            opacity: 0.8;
+        }
+        input[type="range"] {
+            width: 100%;
+            height: 4px;
+            background: rgba(255,255,255,0.1);
+            border-radius: 2px;
+            appearance: none;
+            outline: none;
+        }
+        input[type="range"]::-webkit-slider-thumb {
+            appearance: none;
+            width: 12px;
+            height: 12px;
+            background: #fff;
+            border-radius: 50%;
+            cursor: pointer;
+            box-shadow: 0 0 10px rgba(0,0,0,0.5);
+        }
+        
+        #ui.hidden {
+            transform: translateX(-130%);
+            opacity: 0;
+        }
+        #toggle-ui {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            z-index: 11;
+            background: rgba(255,255,255,0.9);
+            color: #0f172a;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-weight: 600;
+            font-size: 0.75rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+            transition: all 0.2s ease;
+        }
+        #toggle-ui:hover { background: #fff; transform: translateY(-1px); }
+        h1 { margin: 0 0 4px 0; font-size: 1.1rem; font-weight: 700; }
+        .desc { margin: 0 0 20px 0; font-size: 0.8rem; opacity: 0.6; line-height: 1.4; }
+        .highlight { color: #fff; font-weight: bold; }
+        .badge {
+            display: inline-block;
+            background: #fff;
+            color: #4488ff;
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-size: 0.7rem;
+            font-weight: bold;
+            margin-bottom: 10px;
+        }
+    </style>
+</head>
+<body>
+    <!-- Import Three.js via CDN (esm.sh automatically resolves internal dependencies) -->
+    <script type="module">
+        import * as THREE from 'https://esm.sh/three@0.160.0';
+        import { OrbitControls } from 'https://esm.sh/three@0.160.0/examples/jsm/controls/OrbitControls.js';
+        import { Sky } from 'https://esm.sh/three@0.160.0/examples/jsm/objects/Sky.js';
+        import { EffectComposer } from 'https://esm.sh/three@0.160.0/examples/jsm/postprocessing/EffectComposer.js';
+        import { RenderPass } from 'https://esm.sh/three@0.160.0/examples/jsm/postprocessing/RenderPass.js';
+        import { UnrealBloomPass } from 'https://esm.sh/three@0.160.0/examples/jsm/postprocessing/UnrealBloomPass.js';
+
+        // 1. Setup Scene, Camera, and Renderer
+        const scene = new THREE.Scene();
+        
+        const camera = new THREE.PerspectiveCamera(60, 1, 0.1, 2000);
+        camera.position.set(0, 0.5, 12.5);
+
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        const size = Math.min(window.innerWidth, window.innerHeight * 0.9);
+        renderer.setSize(size, size);
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+        renderer.toneMapping = THREE.ACESFilmicToneMapping;
+        renderer.toneMappingExposure = 1.0;
+        document.body.appendChild(renderer.domElement);
+
+        const controls = new OrbitControls(camera, renderer.domElement);
+        controls.enableDamping = true;
+        controls.dampingFactor = 0.05;
+
+        // 1.5 Post-Processing (Bloom)
+        const renderScene = new RenderPass(scene, camera);
+        const bloomPass = new UnrealBloomPass(new THREE.Vector2(size, size), 0.22, 1.00, 0.99);
+        
+        const composer = new EffectComposer(renderer);
+        composer.addPass(renderScene);
+        composer.addPass(bloomPass);
+
+        // 2. Physical Sky
+        const sky = new Sky();
+        sky.scale.setScalar(450000);
+        
+        // Patch the Sky shader to permanently hide the sun disc while keeping the light
+        sky.material.onBeforeCompile = (shader) => {
+            // Remove the direct radiance contribution (L0)
+            shader.fragmentShader = shader.fragmentShader.replace(
+                /vec3\s+L0\s+=\s+[^;]+;/g,
+                'vec3 L0 = vec3(0.0);'
+            );
+            // Remove the sun disc blending (the white circle)
+            shader.fragmentShader = shader.fragmentShader.replace(
+                /ret\.color\s+=\s+mix\s*\(\s*ret\.color\s*,\s*vec3\s*\(\s*1\.0\s*\)\s*,\s*sunfade\s*\)\s*;/g,
+                'ret.color = ret.color;'
+            );
+            // Force sunfade to 0 at the start of main as a fallback
+            shader.fragmentShader = shader.fragmentShader.replace(
+                /void\s+main\s*\(\s*\)\s*\{/,
+                'void main() { float sunfade = 0.0;'
+            );
+        };
+        scene.add(sky);
+
+        const sun = new THREE.Vector3();
+
+        const skyParams = {
+            turbidity: 12.1,
+            rayleigh: 1.48,
+            mieCoefficient: 0.0,
+            mieDirectionalG: 0.7,
+            elevation: 1.8,
+            azimuth: 192.1,
+            exposure: 0.34,
+            ozone: 0.64
+        };
+
+        function updateSky() {
+            const uniforms = sky.material.uniforms;
+            uniforms['turbidity'].value = skyParams.turbidity;
+            uniforms['rayleigh'].value = skyParams.rayleigh;
+            uniforms['mieCoefficient'].value = skyParams.mieCoefficient;
+            uniforms['mieDirectionalG'].value = skyParams.mieDirectionalG;
+
+            const phi = THREE.MathUtils.degToRad(90 - skyParams.elevation);
+            const theta = THREE.MathUtils.degToRad(skyParams.azimuth);
+
+            sun.setFromSphericalCoords(1, phi, theta);
+            uniforms['sunPosition'].value.copy(sun);
+            
+            renderer.toneMappingExposure = skyParams.exposure;
+
+            if (cloudMaterial) {
+                cloudMaterial.uniforms.sunPosition.value.copy(sun);
+                
+                const elevation = skyParams.elevation;
+                
+                // Calculate sun intensity based on elevation (fades out at -12 degrees for high altitude clouds)
+                const sunIntensity = Math.max(0, Math.min(1, (elevation + 12) / 27));
+                
+                // Dynamic sun color: White -> Golden/Orange -> Deep Red/Pink
+                const colorDay = new THREE.Color(1.0, 0.98, 0.95);
+                const colorSunset = new THREE.Color(1.0, 0.45, 0.05);
+                const colorTwilight = new THREE.Color(0.8, 0.1, 0.25);
+                
+                const lightColor = new THREE.Color();
+                if (elevation > 15) {
+                    lightColor.copy(colorDay);
+                } else if (elevation > 0) {
+                    lightColor.lerpColors(colorSunset, colorDay, elevation / 15);
+                } else {
+                    lightColor.lerpColors(colorTwilight, colorSunset, Math.max(0, elevation + 12) / 12);
+                }
+                lightColor.multiplyScalar(sunIntensity);
+                cloudMaterial.uniforms.lightColor.value.copy(lightColor);
+                
+                // Simulate ozone and atmospheric scattering by tinting the shadow color
+                const ozoneFactor = skyParams.ozone;
+                // Ambient light drops off after sunset, but slower than direct sun
+                const ambientIntensity = Math.max(0.02, Math.min(1, (elevation + 15) / 30));
+                const r = (0.3 + (1.0 - ozoneFactor) * 0.2) * ambientIntensity;
+                const g = (0.4 + ozoneFactor * 0.2) * ambientIntensity;
+                const b = (0.6 + ozoneFactor * 0.25) * ambientIntensity;
+                
+                cloudMaterial.uniforms.shadowColor.value.setRGB(r, g, b);
+                cloudMaterial.uniforms.exposure.value = skyParams.exposure;
+            }
+        }
+
+        // 3. Raymarching Shader Material
+        const vertexShader = `
+            varying vec3 vOrigin;
+            varying vec3 vDirection;
+            void main() {
+                vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
+                gl_Position = projectionMatrix * mvPosition;
+                vOrigin = vec3(inverse(modelMatrix) * vec4(cameraPosition, 1.0)).xyz;
+                vDirection = position - vOrigin;
+            }
+        `;
+
+        const fragmentShader = `
+            precision highp float;
+            varying vec3 vOrigin;
+            varying vec3 vDirection;
+            
+            uniform float time;
+            uniform vec3 sunPosition;
+            uniform vec3 shadowColor;
+            uniform vec3 lightColor;
+            uniform float exposure;
+            uniform float noiseScale;
+            uniform float noiseAmplitude;
+            uniform float cloudCoverage;
+            uniform vec3 cloudBounds;
+
+            // --- 3D Simplex Noise ---
+            vec3 mod289(vec3 x) { return x - floor(x * (1.0 / 289.0)) * 289.0; }
+            vec4 mod289(vec4 x) { return x - floor(x * (1.0 / 289.0)) * 289.0; }
+            vec4 permute(vec4 x) { return mod289(((x*34.0)+1.0)*x); }
+            vec4 taylorInvSqrt(vec4 r) { return 1.79284291400159 - 0.85373472095314 * r; }
+
+            float snoise(vec3 v) {
+                const vec2  C = vec2(1.0/6.0, 1.0/3.0) ;
+                const vec4  D = vec4(0.0, 0.5, 1.0, 2.0);
+                vec3 i  = floor(v + dot(v, C.yyy) );
+                vec3 x0 = v - i + dot(i, C.xxx) ;
+                vec3 g = step(x0.yzx, x0.xyz);
+                vec3 l = 1.0 - g;
+                vec3 i1 = min( g.xyz, l.zxy );
+                vec3 i2 = max( g.xyz, l.zxy );
+                vec3 x1 = x0 - i1 + C.xxx;
+                vec3 x2 = x0 - i2 + C.yyy;
+                vec3 x3 = x0 - D.yyy;
+                i = mod289(i);
+                vec4 p = permute( permute( permute(
+                            i.z + vec4(0.0, i1.z, i2.z, 1.0 ))
+                        + i.y + vec4(0.0, i1.y, i2.y, 1.0 ))
+                        + i.x + vec4(0.0, i1.x, i2.x, 1.0 ));
+                float n_ = 0.142857142857;
+                vec3  ns = n_ * D.wyz - D.xzx;
+                vec4 j = p - 49.0 * floor(p * ns.z * ns.z);
+                vec4 x_ = floor(j * ns.z);
+                vec4 y_ = floor(j - 7.0 * x_ );
+                vec4 x = x_ *ns.x + ns.yyyy;
+                vec4 y = y_ *ns.x + ns.yyyy;
+                vec4 h = 1.0 - abs(x) - abs(y);
+                vec4 b0 = vec4( x.xy, y.xy );
+                vec4 b1 = vec4( x.zw, y.zw );
+                vec4 s0 = floor(b0)*2.0 + 1.0;
+                vec4 s1 = floor(b1)*2.0 + 1.0;
+                vec4 sh = -step(h, vec4(0.0));
+                vec4 a0 = b0.xzyw + s0.xzyw*sh.xxyy ;
+                vec4 a1 = b1.xzyw + s1.xzyw*sh.zzww ;
+                vec3 p0 = vec3(a0.xy,h.x);
+                vec3 p1 = vec3(a0.zw,h.y);
+                vec3 p2 = vec3(a1.xy,h.z);
+                vec3 p3 = vec3(a1.zw,h.w);
+                vec4 norm = taylorInvSqrt(vec4(dot(p0,p0), dot(p1,p1), dot(p2, p2), dot(p3,p3)));
+                p0 *= norm.x;
+                p1 *= norm.y;
+                p2 *= norm.z;
+                p3 *= norm.w;
+                vec4 m = max(0.6 - vec4(dot(x0,x0), dot(x1,x1), dot(x2,x2), dot(x3,x3)), 0.0);
+                m = m * m;
+                return 42.0 * dot( m*m, vec4( dot(p0,x0), dot(p1,x1), dot(p2,x2), dot(p3,x3) ) );
+            }
+
+            float fbm(vec3 p, int octaves) {
+                float f = 0.0;
+                float amp = 0.5;
+                for(int i=0; i<5; i++) {
+                    if (i >= octaves) break;
+                    f += amp * snoise(p);
+                    p *= 2.2;
+                    amp *= 0.45;
+                }
+                return f;
+            }
+
+            float map(vec3 p, int octaves) {
+                // Scale the position by the bounds to stretch/squash the base sphere
+                vec3 pScaled = p * cloudBounds;
+                float d = length(pScaled) - 2.5;
+                vec3 noisePos = p * noiseScale - vec3(time * 0.04, 0.0, 0.0);
+                float noise = fbm(noisePos, octaves);
+                float density = smoothstep(1.0, -1.5, d + noise * noiseAmplitude - cloudCoverage);
+                return clamp(density, 0.0, 1.0);
+            }
+
+            // Simple hash for ray jittering
+            float hash(vec2 p) {
+                return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453);
+            }
+
+            // Ray-sphere intersection to find entry/exit points
+            vec2 intersectSphere(vec3 origin, vec3 dir, float radius) {
+                float b = dot(origin, dir);
+                float c = dot(origin, origin) - radius * radius;
+                float h = b * b - c;
+                if (h < 0.0) return vec2(-1.0);
+                h = sqrt(h);
+                return vec2(-b - h, -b + h);
+            }
+
+            void main() {
+                vec3 rayDir = normalize(vDirection);
+                vec3 rayPos = vOrigin;
+                
+                // Find intersection with bounding sphere (radius 5.5)
+                vec2 bounds = intersectSphere(rayPos, rayDir, 5.5);
+                if (bounds.y < 0.0) discard;
+                
+                float tStart = max(0.0, bounds.x);
+                float tEnd = bounds.y;
+                
+                // Ray jittering to hide banding with fewer steps
+                float jitter = hash(gl_FragCoord.xy) * 0.2;
+                float t = tStart + jitter;
+                
+                float stepSize = 0.2; // Increased step size
+                vec4 color = vec4(0.0);
+                vec3 lightDir = normalize(sunPosition);
+                
+                // Optimized loop
+                for(int i=0; i<48; i++) { // Significantly reduced max steps
+                    if (t > tEnd || color.a > 0.98) break;
+                    
+                    vec3 p = rayPos + rayDir * t;
+                    float density = map(p, 3); // Lower octaves for main ray
+                    
+                    if(density > 0.01) {
+                        // Coarse shadow calculation (only 1 octave)
+                        float lightDensity = map(p + lightDir * 0.4, 1);
+                        float shadow = exp(-lightDensity * 3.0);
+                        
+                        // Henyey-Greenstein phase function for forward scattering
+                        float cosTheta = dot(rayDir, lightDir);
+                        float g = 0.6;
+                        float phase = (1.0 - g*g) / pow(1.0 + g*g - 2.0*g*cosTheta, 1.5);
+                        
+                        vec3 cloudColor = mix(shadowColor, lightColor * (1.0 + phase * 0.5), shadow);
+                        cloudColor *= exposure;
+                        
+                        float alpha = density * 0.45; // Adjusted for larger steps
+                        color.rgb += (1.0 - color.a) * cloudColor * alpha;
+                        color.a += (1.0 - color.a) * alpha;
+                    }
+                    
+                    t += stepSize;
+                }
+                
+                gl_FragColor = color;
+            }
+        `;
+
+        const geometry = new THREE.BoxGeometry(15, 15, 15);
+        const cloudMaterial = new THREE.ShaderMaterial({
+            vertexShader,
+            fragmentShader,
+            uniforms: {
+                time: { value: 0 },
+                sunPosition: { value: new THREE.Vector3() },
+                shadowColor: { value: new THREE.Color(0.6, 0.7, 0.85) },
+                lightColor: { value: new THREE.Color(1.0, 0.98, 0.95) },
+                exposure: { value: 0.34 },
+                noiseScale: { value: 0.57 },
+                noiseAmplitude: { value: 2.87 },
+                cloudCoverage: { value: -1.07 },
+                cloudBounds: { value: new THREE.Vector3(0.71, 1.45, 1.79) }
+            },
+            transparent: true,
+            side: THREE.BackSide,
+            depthWrite: false
+        });
+
+        const cloudVolume = new THREE.Mesh(geometry, cloudMaterial);
+        scene.add(cloudVolume);
+
+        // 4. Glowing Torus
+        // Overall diameter halved (was 16, now 8), so radius ~4
+        // Hole is 99% -> inner radius is 99% of outer radius
+        const outerRadius = 4.0;
+        const innerRadius = outerRadius * 0.99;
+        const torusRadius = (outerRadius + innerRadius) / 2;
+        const torusTube = (outerRadius - innerRadius) / 2;
+
+        const torusGeometry = new THREE.TorusGeometry(torusRadius, torusTube, 32, 128);
+        const torusMaterial = new THREE.MeshBasicMaterial({ 
+            color: new THREE.Color(0x00ffff).multiplyScalar(10),
+            transparent: true,
+            opacity: 0.9
+        });
+        const torus = new THREE.Mesh(torusGeometry, torusMaterial);
+        torus.rotation.x = 0; // Rotate 90 degrees from flat to vertical
+        torus.rotation.z = Math.PI / 2; // Rotate 90 degrees on Z axis
+        scene.add(torus);
+
+        updateSky();
+
+        window.addEventListener('resize', () => {
+            const size = Math.min(window.innerWidth, window.innerHeight * 0.9);
+            camera.aspect = 1;
+            camera.updateProjectionMatrix();
+            renderer.setSize(size, size);
+            composer.setSize(size, size);
+        });
+
+        const clock = new THREE.Clock();
+        function animate() {
+            requestAnimationFrame(animate);
+            const dt = clock.getDelta();
+            cloudMaterial.uniforms.time.value += dt;
+            controls.update();
+            composer.render();
+        }
+        animate();
+    </script>
+</body>
+</html>
