@@ -17,38 +17,40 @@
             height: 100vh;
         }
         #ui { 
+            display: none;
             position: absolute; 
             top: 20px; 
             left: 20px; 
             z-index: 10; 
-            background: rgba(15, 23, 42, 0.8); 
-            padding: 20px; 
-            border-radius: 12px; 
+            background: rgba(15, 23, 42, 0.85); 
+            padding: 12px; 
+            border-radius: 8px; 
             border: 1px solid rgba(255,255,255,0.1); 
-            max-width: 320px; 
+            width: 220px; 
             backdrop-filter: blur(12px);
             transition: transform 0.4s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.4s ease;
             color: #fff;
             box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.3);
             max-height: 85vh;
             overflow-y: auto;
+            font-size: 0.85rem;
         }
-        #ui::-webkit-scrollbar { width: 4px; }
+        #ui::-webkit-scrollbar { width: 3px; }
         #ui::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.2); border-radius: 2px; }
         
-        .control-group { margin-bottom: 16px; }
+        .control-group { margin-bottom: 10px; }
         .control-label { 
             display: flex; 
             justify-content: space-between; 
-            font-size: 0.75rem; 
+            font-size: 0.65rem; 
             text-transform: uppercase; 
             letter-spacing: 0.05em; 
-            margin-bottom: 6px;
+            margin-bottom: 4px;
             opacity: 0.8;
         }
         input[type="range"] {
             width: 100%;
-            height: 4px;
+            height: 3px;
             background: rgba(255,255,255,0.1);
             border-radius: 2px;
             appearance: none;
@@ -56,12 +58,11 @@
         }
         input[type="range"]::-webkit-slider-thumb {
             appearance: none;
-            width: 12px;
-            height: 12px;
+            width: 10px;
+            height: 10px;
             background: #fff;
             border-radius: 50%;
             cursor: pointer;
-            box-shadow: 0 0 10px rgba(0,0,0,0.5);
         }
         
         #ui.hidden {
@@ -69,6 +70,7 @@
             opacity: 0;
         }
         #toggle-ui {
+            display: none;
             position: absolute;
             top: 20px;
             left: 20px;
@@ -76,34 +78,54 @@
             background: rgba(255,255,255,0.9);
             color: #0f172a;
             border: none;
-            padding: 8px 16px;
-            border-radius: 6px;
+            padding: 6px 12px;
+            border-radius: 4px;
             cursor: pointer;
             font-weight: 600;
-            font-size: 0.75rem;
+            font-size: 0.65rem;
             text-transform: uppercase;
             letter-spacing: 0.05em;
             box-shadow: 0 4px 12px rgba(0,0,0,0.15);
             transition: all 0.2s ease;
         }
         #toggle-ui:hover { background: #fff; transform: translateY(-1px); }
-        h1 { margin: 0 0 4px 0; font-size: 1.1rem; font-weight: 700; }
-        .desc { margin: 0 0 20px 0; font-size: 0.8rem; opacity: 0.6; line-height: 1.4; }
+        .desc { margin: 0 0 12px 0; font-size: 0.7rem; opacity: 0.6; line-height: 1.3; }
         .highlight { color: #fff; font-weight: bold; }
         .badge {
             display: inline-block;
             background: #fff;
-            color: #4488ff;
-            padding: 2px 6px;
-            border-radius: 4px;
-            font-size: 0.7rem;
+            color: #0f172a;
+            padding: 1px 5px;
+            border-radius: 3px;
+            font-size: 0.6rem;
             font-weight: bold;
-            margin-bottom: 10px;
+            margin-bottom: 8px;
         }
     </style>
 </head>
 <body>
-    <!-- Import Three.js via CDN (esm.sh automatically resolves internal dependencies) -->
+    <button id="toggle-ui">Settings</button>
+    <div id="ui">
+        <div class="badge">VOLUMETRIC CLOCK</div>
+        <h1>Atmospheric Time</h1>
+        <p class="desc">Interactive volumetric smoke. <span class="highlight">Click viewport</span> to reveal time.</p>
+        
+        <div class="control-group">
+            <div class="control-label"><span>Sun Elevation</span><span id="elevation-val">1.80</span></div>
+            <input type="range" id="elevation" min="-20.0" max="90.0" step="0.1" value="1.80">
+        </div>
+        
+        <div class="control-group">
+            <div class="control-label"><span>Sun Rotation</span><span id="azimuth-val">192.10</span></div>
+            <input type="range" id="azimuth" min="0.0" max="360.0" step="0.1" value="192.10">
+        </div>
+
+        <div id="sun-info" style="font-size: 0.65rem; opacity: 0.5; margin-top: 15px; border-top: 1px solid rgba(255,255,255,0.1); padding-top: 10px;">
+            Fetching local sun timings...
+        </div>
+    </div>
+
+    <!-- Three.js Setup -->
     <script type="module">
         import * as THREE from 'https://esm.sh/three@0.160.0';
         import { OrbitControls } from 'https://esm.sh/three@0.160.0/examples/jsm/controls/OrbitControls.js';
@@ -112,9 +134,58 @@
         import { RenderPass } from 'https://esm.sh/three@0.160.0/examples/jsm/postprocessing/RenderPass.js';
         import { UnrealBloomPass } from 'https://esm.sh/three@0.160.0/examples/jsm/postprocessing/UnrealBloomPass.js';
 
-        // 1. Setup Scene, Camera, and Renderer
+        // Scene Setup
         const scene = new THREE.Scene();
+
+        // Sun Data State
+        let sunData = {
+            sunrise: 6.0,
+            sunset: 18.0,
+            solarNoon: 12.0,
+            dayLength: 12.0,
+            isReal: false
+        };
+
+        // Fetch Sunrise/Sunset Data
+        async function fetchSunData() {
+            if (!navigator.geolocation) {
+                document.getElementById('sun-info').textContent = "Geolocation not supported.";
+                return;
+            }
+            
+            navigator.geolocation.getCurrentPosition(async (position) => {
+                const { latitude, longitude } = position.coords;
+                try {
+                    const response = await fetch(`https://api.sunrise-sunset.org/json?lat=${latitude}&lng=${longitude}&formatted=0`);
+                    const data = await response.json();
+                    if (data.status === "OK") {
+                        const sunrise = new Date(data.results.sunrise);
+                        const sunset = new Date(data.results.sunset);
+                        const solarNoon = new Date(data.results.solar_noon);
+                        
+                        sunData.sunrise = sunrise.getHours() + sunrise.getMinutes() / 60 + sunrise.getSeconds() / 3600;
+                        sunData.sunset = sunset.getHours() + sunset.getMinutes() / 60 + sunset.getSeconds() / 3600;
+                        sunData.solarNoon = solarNoon.getHours() + solarNoon.getMinutes() / 60 + solarNoon.getSeconds() / 3600;
+                        sunData.dayLength = data.results.day_length / 3600;
+                        sunData.isReal = true;
+                        
+                        const sunInfo = document.getElementById('sun-info');
+                        if (sunInfo) {
+                            sunInfo.innerHTML = `Sunrise: ${sunrise.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})} | Sunset: ${sunset.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}`;
+                        }
+                    }
+                } catch (error) {
+                    console.error("Sun API Error:", error);
+                    document.getElementById('sun-info').textContent = "API Error. Using default timings.";
+                }
+            }, (error) => {
+                console.warn("Geolocation failed:", error);
+                document.getElementById('sun-info').textContent = "Location denied. Using default timings.";
+            });
+        }
+        fetchSunData();
         
+        // Renderer & Camera
         const camera = new THREE.PerspectiveCamera(60, 1, 0.1, 2000);
         camera.position.set(0, 0.5, 12.5);
 
@@ -130,40 +201,58 @@
         controls.enableDamping = true;
         controls.dampingFactor = 0.05;
 
-        // 1.5 Post-Processing (Bloom)
+        // Post-Processing
         const renderScene = new RenderPass(scene, camera);
         const bloomPass = new UnrealBloomPass(new THREE.Vector2(size, size), 0.22, 1.00, 0.99);
         
-        const composer = new EffectComposer(renderer);
-        composer.addPass(renderScene);
-        composer.addPass(bloomPass);
+        const finalComposer = new EffectComposer(renderer);
+        finalComposer.addPass(renderScene);
+        finalComposer.addPass(bloomPass);
 
-        // 2. Physical Sky
+        // Star System
+        const starGeometry = new THREE.BufferGeometry();
+        const starCount = 2000;
+        const starPositions = new Float32Array(starCount * 3);
+        
+        for (let i = 0; i < starCount; i++) {
+            const r = 800 + Math.random() * 200;
+            const theta = Math.random() * Math.PI * 2;
+            const phi = Math.acos(2 * Math.random() - 1);
+            
+            starPositions[i * 3] = r * Math.sin(phi) * Math.cos(theta);
+            starPositions[i * 3 + 1] = r * Math.sin(phi) * Math.sin(theta);
+            starPositions[i * 3 + 2] = r * Math.cos(phi);
+        }
+
+        starGeometry.setAttribute('position', new THREE.BufferAttribute(starPositions, 3));
+        
+        const starMaterial = new THREE.PointsMaterial({
+            color: 0xffffff,
+            size: 1.5,
+            sizeAttenuation: false,
+            transparent: true,
+            opacity: 0,
+            blending: THREE.AdditiveBlending
+        });
+
+        const starPoints = new THREE.Points(starGeometry, starMaterial);
+        starPoints.renderOrder = -1;
+        scene.add(starPoints);
+
+        // Physical Sky
         const sky = new Sky();
         sky.scale.setScalar(450000);
+        sky.renderOrder = -2;
         
-        // Patch the Sky shader to permanently hide the sun disc while keeping the light
         sky.material.onBeforeCompile = (shader) => {
-            // Remove the direct radiance contribution (L0)
             shader.fragmentShader = shader.fragmentShader.replace(
-                /vec3\s+L0\s+=\s+[^;]+;/g,
-                'vec3 L0 = vec3(0.0);'
-            );
-            // Remove the sun disc blending (the white circle)
-            shader.fragmentShader = shader.fragmentShader.replace(
-                /ret\.color\s+=\s+mix\s*\(\s*ret\.color\s*,\s*vec3\s*\(\s*1\.0\s*\)\s*,\s*sunfade\s*\)\s*;/g,
-                'ret.color = ret.color;'
-            );
-            // Force sunfade to 0 at the start of main as a fallback
-            shader.fragmentShader = shader.fragmentShader.replace(
-                /void\s+main\s*\(\s*\)\s*\{/,
-                'void main() { float sunfade = 0.0;'
+                'float sundisk = smoothstep( sunAngularDiameterCos, sunAngularDiameterCos + 0.00002, cosTheta );',
+                'float sundisk = 0.0;'
             );
         };
         scene.add(sky);
 
         const sun = new THREE.Vector3();
-
         const skyParams = {
             turbidity: 12.1,
             rayleigh: 1.48,
@@ -187,18 +276,13 @@
 
             sun.setFromSphericalCoords(1, phi, theta);
             uniforms['sunPosition'].value.copy(sun);
-            
             renderer.toneMappingExposure = skyParams.exposure;
 
             if (cloudMaterial) {
                 cloudMaterial.uniforms.sunPosition.value.copy(sun);
-                
                 const elevation = skyParams.elevation;
-                
-                // Calculate sun intensity based on elevation (fades out at -12 degrees for high altitude clouds)
                 const sunIntensity = Math.max(0, Math.min(1, (elevation + 12) / 27));
                 
-                // Dynamic sun color: White -> Golden/Orange -> Deep Red/Pink
                 const colorDay = new THREE.Color(1.0, 0.98, 0.95);
                 const colorSunset = new THREE.Color(1.0, 0.45, 0.05);
                 const colorTwilight = new THREE.Color(0.8, 0.1, 0.25);
@@ -214,9 +298,7 @@
                 lightColor.multiplyScalar(sunIntensity);
                 cloudMaterial.uniforms.lightColor.value.copy(lightColor);
                 
-                // Simulate ozone and atmospheric scattering by tinting the shadow color
                 const ozoneFactor = skyParams.ozone;
-                // Ambient light drops off after sunset, but slower than direct sun
                 const ambientIntensity = Math.max(0.02, Math.min(1, (elevation + 15) / 30));
                 const r = (0.3 + (1.0 - ozoneFactor) * 0.2) * ambientIntensity;
                 const g = (0.4 + ozoneFactor * 0.2) * ambientIntensity;
@@ -227,7 +309,7 @@
             }
         }
 
-        // 3. Raymarching Shader Material
+        // Raymarching Shader
         const vertexShader = `
             varying vec3 vOrigin;
             varying vec3 vDirection;
@@ -252,7 +334,12 @@
             uniform float noiseScale;
             uniform float noiseAmplitude;
             uniform float cloudCoverage;
+            uniform float noiseAmplitudeTime;
+            uniform float cloudCoverageTime;
             uniform vec3 cloudBounds;
+            
+            uniform float timeMode; // 0.0 = cloud, 1.0 = numbers
+            uniform vec4 digits;    // h1, h2, m1, m2
 
             // --- 3D Simplex Noise ---
             vec3 mod289(vec3 x) { return x - floor(x * (1.0 / 289.0)) * 289.0; }
@@ -318,13 +405,69 @@
                 return f;
             }
 
+            // SDF for a 7-segment display digit
+            float sdSegment(vec2 p, vec2 a, vec2 b) {
+                vec2 pa = p - a, ba = b - a;
+                float h = clamp(dot(pa, ba) / dot(ba, ba), 0.0, 1.0);
+                return length(pa - ba * h);
+            }
+
+            float sdDigit(vec2 p, float digit) {
+                float d = 1e10;
+                float w = 0.4, h = 0.8;
+                vec2 a = vec2(-w, h), b = vec2(w, h), c = vec2(w, 0.0), d_ = vec2(w, -h), e = vec2(-w, -h), f = vec2(-w, 0.0), g = vec2(0.0, 0.0);
+                
+                int i = int(digit);
+                // Segments: 0:top, 1:top-right, 2:bottom-right, 3:bottom, 4:bottom-left, 5:top-left, 6:middle
+                if(i==0||i==2||i==3||i==5||i==6||i==7||i==8||i==9) d = min(d, sdSegment(p, a, b));
+                if(i==0||i==1||i==2||i==3||i==4||i==7||i==8||i==9) d = min(d, sdSegment(p, b, c));
+                if(i==0||i==1||i==3||i==4||i==5||i==6||i==7||i==8||i==9) d = min(d, sdSegment(p, c, d_));
+                if(i==0||i==2||i==3||i==5||i==6||i==8||i==9) d = min(d, sdSegment(p, d_, e));
+                if(i==0||i==2||i==6||i==8) d = min(d, sdSegment(p, e, f));
+                if(i==0||i==4||i==5||i==6||i==8||i==9) d = min(d, sdSegment(p, f, a));
+                if(i==2||i==3||i==4||i==5||i==6||i==8||i==9) d = min(d, sdSegment(p, f, c));
+                
+                return d - 0.08;
+            }
+
             float map(vec3 p, int octaves) {
-                // Scale the position by the bounds to stretch/squash the base sphere
+                // Standard cloud shape
                 vec3 pScaled = p * cloudBounds;
-                float d = length(pScaled) - 2.5;
+                float dCloud = length(pScaled) - 2.5;
+                
+                // Time numbers shape
+                float dTime = 1e10;
+                // Scale UV for 35% larger numbers (divide by 1.35)
+                // Shifted right and up to adjust position
+                vec2 uv = (p.xy - vec2(-0.5, 0.0)) / 1.35; 
+                float spacing = 1.2;
+                dTime = min(dTime, sdDigit(uv - vec2(-spacing * 1.5, 0.0), digits.x));
+                dTime = min(dTime, sdDigit(uv - vec2(-spacing * 0.5, 0.0), digits.y));
+                // Colon
+                float dColon = min(length(uv - vec2(0.0, 0.3)), length(uv - vec2(0.0, -0.3))) - 0.1;
+                dTime = min(dTime, dColon);
+                dTime = min(dTime, sdDigit(uv - vec2(spacing * 0.5, 0.0), digits.z));
+                dTime = min(dTime, sdDigit(uv - vec2(spacing * 1.5, 0.0), digits.w));
+                
+                // Scale dTime back to world space
+                dTime *= 1.35;
+
+                // Add some depth to the numbers
+                dTime = max(dTime, abs(p.z) - 0.5);
+
+                // Thicken the numbers slightly more
+                dTime -= 0.2;
+
+                float d = mix(dCloud, dTime, timeMode);
+
                 vec3 noisePos = p * noiseScale - vec3(time * 0.04, 0.0, 0.0);
                 float noise = fbm(noisePos, octaves);
-                float density = smoothstep(1.0, -1.5, d + noise * noiseAmplitude - cloudCoverage);
+                
+                // Use separate controls for time mode
+                float currentNoiseAmp = mix(noiseAmplitude, noiseAmplitudeTime, timeMode);
+                float currentCoverage = mix(cloudCoverage, cloudCoverageTime, timeMode);
+                
+                float density = smoothstep(1.0, -1.5, d + noise * currentNoiseAmp - currentCoverage);
                 return clamp(density, 0.0, 1.0);
             }
 
@@ -382,7 +525,7 @@
                         vec3 cloudColor = mix(shadowColor, lightColor * (1.0 + phase * 0.5), shadow);
                         cloudColor *= exposure;
                         
-                        float alpha = density * 0.45; // Adjusted for larger steps
+                        float alpha = density * mix(0.85, 1.8, timeMode); // Increased base density
                         color.rgb += (1.0 - color.a) * cloudColor * alpha;
                         color.a += (1.0 - color.a) * alpha;
                     }
@@ -407,7 +550,11 @@
                 noiseScale: { value: 0.57 },
                 noiseAmplitude: { value: 2.87 },
                 cloudCoverage: { value: -1.07 },
-                cloudBounds: { value: new THREE.Vector3(0.71, 1.45, 1.79) }
+                noiseAmplitudeTime: { value: 0.32 },
+                cloudCoverageTime: { value: -0.90 },
+                cloudBounds: { value: new THREE.Vector3(0.71, 1.45, 1.79) },
+                timeMode: { value: 0 },
+                digits: { value: new THREE.Vector4(0, 0, 0, 0) }
             },
             transparent: true,
             side: THREE.BackSide,
@@ -415,11 +562,10 @@
         });
 
         const cloudVolume = new THREE.Mesh(geometry, cloudMaterial);
+        cloudVolume.renderOrder = 1;
         scene.add(cloudVolume);
 
-        // 4. Glowing Torus
-        // Overall diameter halved (was 16, now 8), so radius ~4
-        // Hole is 99% -> inner radius is 99% of outer radius
+        // Glowing Torus
         const outerRadius = 4.0;
         const innerRadius = outerRadius * 0.99;
         const torusRadius = (outerRadius + innerRadius) / 2;
@@ -432,9 +578,54 @@
             opacity: 0.9
         });
         const torus = new THREE.Mesh(torusGeometry, torusMaterial);
-        torus.rotation.x = 0; // Rotate 90 degrees from flat to vertical
-        torus.rotation.z = Math.PI / 2; // Rotate 90 degrees on Z axis
+        torus.rotation.z = Math.PI / 2;
         scene.add(torus);
+
+        // Clock Spheres
+        const hourSphereGeom = new THREE.SphereGeometry(0.15, 32, 32);
+        const minSphereGeom = new THREE.SphereGeometry(0.1, 32, 32);
+        const secSphereGeom = new THREE.SphereGeometry(0.05, 32, 32);
+        const clockMaterial = new THREE.MeshBasicMaterial({ color: 0x00ffff });
+        
+        const hourSphere = new THREE.Mesh(hourSphereGeom, clockMaterial.clone());
+        const minSphere = new THREE.Mesh(minSphereGeom, clockMaterial.clone());
+        const secSphere = new THREE.Mesh(secSphereGeom, clockMaterial.clone());
+
+        hourSphere.material.color.multiplyScalar(10);
+        minSphere.material.color.multiplyScalar(10);
+        secSphere.material.color.multiplyScalar(10);
+
+        scene.add(hourSphere);
+        scene.add(minSphere);
+        scene.add(secSphere);
+
+        // UI Handlers
+        const ui = document.getElementById('ui');
+        const toggleBtn = document.getElementById('toggle-ui');
+        toggleBtn.addEventListener('click', () => {
+            ui.classList.toggle('hidden');
+            toggleBtn.textContent = ui.classList.contains('hidden') ? 'Settings' : 'Close';
+        });
+
+        const setupControl = (id, callback, valId) => {
+            const el = document.getElementById(id);
+            const valEl = document.getElementById(valId);
+            el.addEventListener('input', () => {
+                const val = parseFloat(el.value);
+                callback(val);
+                valEl.textContent = val.toFixed(2);
+            });
+        };
+
+        setupControl('elevation', (val) => {
+            skyParams.elevation = val;
+            updateSky();
+        }, 'elevation-val');
+
+        setupControl('azimuth', (val) => {
+            skyParams.azimuth = val;
+            updateSky();
+        }, 'azimuth-val');
 
         updateSky();
 
@@ -443,16 +634,102 @@
             camera.aspect = 1;
             camera.updateProjectionMatrix();
             renderer.setSize(size, size);
-            composer.setSize(size, size);
+            finalComposer.setSize(size, size);
         });
 
         const clock = new THREE.Clock();
+        let timeDisplayTimer = 0;
+        const TIME_DISPLAY_DURATION = 6;
+
+        renderer.domElement.addEventListener('click', () => {
+            timeDisplayTimer = TIME_DISPLAY_DURATION;
+            const now = new Date();
+            const h = now.getHours();
+            const m = now.getMinutes();
+            cloudMaterial.uniforms.digits.value.set(
+                Math.floor(h / 10), h % 10,
+                Math.floor(m / 10), m % 10
+            );
+        });
+
+        // Animation Loop
         function animate() {
             requestAnimationFrame(animate);
             const dt = clock.getDelta();
+            const elapsedTime = clock.getElapsedTime();
             cloudMaterial.uniforms.time.value += dt;
+
+            // Time display transition
+            if (timeDisplayTimer > 0) {
+                timeDisplayTimer -= dt;
+                cloudMaterial.uniforms.timeMode.value = Math.min(1, cloudMaterial.uniforms.timeMode.value + dt * 2);
+            } else {
+                cloudMaterial.uniforms.timeMode.value = Math.max(0, cloudMaterial.uniforms.timeMode.value - dt * 2);
+            }
+
+            // Sun Position
+            const now = new Date();
+            const hourFloat = now.getHours() + now.getMinutes() / 60 + now.getSeconds() / 3600;
+            
+            if (sunData.isReal) {
+                const dayLength = sunData.sunset - sunData.sunrise;
+                const nightLength = 24 - dayLength;
+                
+                if (hourFloat >= sunData.sunrise && hourFloat <= sunData.sunset) {
+                    const t = (hourFloat - sunData.sunrise) / dayLength;
+                    skyParams.elevation = 5.0 * Math.sin(Math.PI * t);
+                    skyParams.azimuth = 90 + (180 - 90) * t;
+                } else {
+                    let t;
+                    if (hourFloat > sunData.sunset) {
+                        t = (hourFloat - sunData.sunset) / nightLength;
+                    } else {
+                        t = (hourFloat + (24 - sunData.sunset)) / nightLength;
+                    }
+                    skyParams.elevation = -5.7 * Math.sin(Math.PI * t);
+                    skyParams.azimuth = 180 + (360 + 90 - 180) * t;
+                    if (skyParams.azimuth > 360) skyParams.azimuth -= 360;
+                }
+            } else {
+                skyParams.elevation = -0.35 + 5.35 * Math.cos(2 * Math.PI * (hourFloat - 12) / 24);
+                if (hourFloat >= 6 && hourFloat <= 18) {
+                    skyParams.azimuth = 90 + (180 - 90) * (hourFloat - 6) / 12;
+                } else {
+                    let t = hourFloat > 18 ? (hourFloat - 18) / 12 : (hourFloat + 6) / 12;
+                    skyParams.azimuth = 180 + (360 + 90 - 180) * t;
+                    if (skyParams.azimuth > 360) skyParams.azimuth -= 360;
+                }
+            }
+            
+            updateSky();
+
+            // Stars
+            let starOpacity = 0;
+            if (skyParams.elevation < 0) {
+                starOpacity = Math.min(1, Math.abs(skyParams.elevation) / 2);
+            }
+            starMaterial.opacity = starOpacity;
+            if (starOpacity > 0) {
+                starMaterial.size = 0.8 + Math.sin(elapsedTime * 4) * 0.2;
+            }
+
+            // Clock Hands
+            const hours = now.getHours() % 12;
+            const minutes = now.getMinutes();
+            const seconds = now.getSeconds();
+            const milliseconds = now.getMilliseconds();
+
+            const secAngle = ((seconds + milliseconds / 1000) / 60) * Math.PI * 2;
+            const minAngle = ((minutes + seconds / 60) / 60) * Math.PI * 2;
+            const hourAngle = ((hours + minutes / 60) / 12) * Math.PI * 2;
+
+            const r = torusRadius;
+            secSphere.position.set(r * Math.sin(secAngle), r * Math.cos(secAngle), 0);
+            minSphere.position.set(r * Math.sin(minAngle), r * Math.cos(minAngle), 0);
+            hourSphere.position.set(r * Math.sin(hourAngle), r * Math.cos(hourAngle), 0);
+
             controls.update();
-            composer.render();
+            finalComposer.render();
         }
         animate();
     </script>
