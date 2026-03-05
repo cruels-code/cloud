@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Cloud Time II</title>
+    <title>CS2 Volumetric Smoke Simulation</title>
     <style>
         body { 
             margin: 0; 
@@ -281,30 +281,50 @@
             if (cloudMaterial) {
                 cloudMaterial.uniforms.sunPosition.value.copy(sun);
                 const elevation = skyParams.elevation;
-                const sunIntensity = Math.max(0, Math.min(1, (elevation + 12) / 27));
                 
-                const colorDay = new THREE.Color(1.0, 0.98, 0.95);
-                const colorSunset = new THREE.Color(1.0, 0.45, 0.05);
-                const colorTwilight = new THREE.Color(0.8, 0.1, 0.25);
+                // Dynamic Sun Intensity: drops off as sun goes below horizon
+                const sunIntensity = Math.max(0, Math.min(1.0, (elevation + 10) / 25));
+                
+                // Light Color (Direct Sun) - Multi-stage transition for realism
+                const colorDay = new THREE.Color(1.0, 0.98, 0.92);      // Bright midday
+                const colorGolden = new THREE.Color(1.0, 0.80, 0.35);  // Golden hour
+                const colorSunset = new THREE.Color(1.0, 0.30, 0.05);  // Deep sunset
+                const colorTwilight = new THREE.Color(0.5, 0.15, 0.4); // Post-sunset purple
                 
                 const lightColor = new THREE.Color();
-                if (elevation > 15) {
+                if (elevation > 20) {
                     lightColor.copy(colorDay);
+                } else if (elevation > 5) {
+                    lightColor.lerpColors(colorGolden, colorDay, (elevation - 5) / 15);
                 } else if (elevation > 0) {
-                    lightColor.lerpColors(colorSunset, colorDay, elevation / 15);
+                    lightColor.lerpColors(colorSunset, colorGolden, elevation / 5);
+                } else if (elevation > -10) {
+                    lightColor.lerpColors(colorTwilight, colorSunset, (elevation + 10) / 10);
                 } else {
-                    lightColor.lerpColors(colorTwilight, colorSunset, Math.max(0, elevation + 12) / 12);
+                    lightColor.setRGB(0.05, 0.05, 0.15); // Night light
                 }
+                
                 lightColor.multiplyScalar(sunIntensity);
                 cloudMaterial.uniforms.lightColor.value.copy(lightColor);
                 
-                const ozoneFactor = skyParams.ozone;
-                const ambientIntensity = Math.max(0.02, Math.min(1, (elevation + 15) / 30));
-                const r = (0.3 + (1.0 - ozoneFactor) * 0.2) * ambientIntensity;
-                const g = (0.4 + ozoneFactor * 0.2) * ambientIntensity;
-                const b = (0.6 + ozoneFactor * 0.25) * ambientIntensity;
+                // Shadow Color (Ambient/Sky light) - Reacts to sky state
+                const ambientIntensity = Math.max(0.04, Math.min(1, (elevation + 20) / 40));
+                const shadowColor = new THREE.Color();
                 
-                cloudMaterial.uniforms.shadowColor.value.setRGB(r, g, b);
+                if (elevation > 0) {
+                    // Day: Blueish shadows from sky scattering, shifting to purple at low sun
+                    const skyBlue = new THREE.Color(0.45, 0.6, 0.85);
+                    const sunsetPurple = new THREE.Color(0.55, 0.45, 0.75);
+                    shadowColor.lerpColors(sunsetPurple, skyBlue, Math.min(1, elevation / 12));
+                } else {
+                    // Night: Deep indigo/purple transition
+                    const nightBlue = new THREE.Color(0.02, 0.02, 0.08);
+                    const twilightPurple = new THREE.Color(0.25, 0.15, 0.45);
+                    shadowColor.lerpColors(nightBlue, twilightPurple, Math.max(0, (elevation + 15) / 15));
+                }
+                
+                shadowColor.multiplyScalar(ambientIntensity);
+                cloudMaterial.uniforms.shadowColor.value.copy(shadowColor);
                 cloudMaterial.uniforms.exposure.value = skyParams.exposure;
             }
         }
