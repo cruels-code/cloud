@@ -120,6 +120,14 @@
             <input type="range" id="azimuth" min="0.0" max="360.0" step="0.1" value="192.10">
         </div>
 
+        <div class="control-group">
+            <div class="control-label"><span>Time of Day</span><span id="time-val">Real-time</span></div>
+            <input type="range" id="time-slider" min="0" max="23.99" step="0.01" value="0">
+            <div style="display: flex; justify-content: space-between; margin-top: 4px;">
+                <button id="reset-time" style="background: rgba(255,255,255,0.1); border: none; color: white; font-size: 0.6rem; padding: 2px 6px; border-radius: 4px; cursor: pointer;">Reset to Real-time</button>
+            </div>
+        </div>
+
         <div id="sun-info" style="font-size: 0.65rem; opacity: 0.5; margin-top: 15px; border-top: 1px solid rgba(255,255,255,0.1); padding-top: 10px;">
             Fetching local sun timings...
         </div>
@@ -186,12 +194,11 @@
         fetchSunData();
         
         // Renderer & Camera
-        const camera = new THREE.PerspectiveCamera(60, 1, 0.1, 2000);
+        const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 2000);
         camera.position.set(0, 0.5, 12.5);
 
         const renderer = new THREE.WebGLRenderer({ antialias: true });
-        const size = Math.min(window.innerWidth, window.innerHeight * 0.9);
-        renderer.setSize(size, size);
+        renderer.setSize(window.innerWidth, window.innerHeight);
         renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
         renderer.toneMapping = THREE.ACESFilmicToneMapping;
         renderer.toneMappingExposure = 1.0;
@@ -203,7 +210,7 @@
 
         // Post-Processing
         const renderScene = new RenderPass(scene, camera);
-        const bloomPass = new UnrealBloomPass(new THREE.Vector2(size, size), 0.22, 1.00, 0.99);
+        const bloomPass = new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 0.22, 1.00, 0.99);
         
         const finalComposer = new EffectComposer(renderer);
         finalComposer.addPass(renderScene);
@@ -211,13 +218,14 @@
 
         // Star System
         const starGeometry = new THREE.BufferGeometry();
-        const starCount = 2000;
+        const starCount = 1000; // Reduced by 50%
         const starPositions = new Float32Array(starCount * 3);
         
         for (let i = 0; i < starCount; i++) {
             const r = 800 + Math.random() * 200;
             const theta = Math.random() * Math.PI * 2;
-            const phi = Math.acos(2 * Math.random() - 1);
+            // Only upper hemisphere: phi from 0 to PI/2 (Y > 0)
+            const phi = Math.acos(Math.random()); 
             
             starPositions[i * 3] = r * Math.sin(phi) * Math.cos(theta);
             starPositions[i * 3 + 1] = r * Math.sin(phi) * Math.sin(theta);
@@ -226,13 +234,35 @@
 
         starGeometry.setAttribute('position', new THREE.BufferAttribute(starPositions, 3));
         
-        const starMaterial = new THREE.PointsMaterial({
-            color: 0xffffff,
-            size: 1.5,
-            sizeAttenuation: false,
+        const starMaterial = new THREE.ShaderMaterial({
+            uniforms: {
+                opacity: { value: 0 },
+                size: { value: 1.5 }
+            },
             transparent: true,
-            opacity: 0,
-            blending: THREE.AdditiveBlending
+            blending: THREE.AdditiveBlending,
+            vertexShader: `
+                uniform float size;
+                varying float vOpacity;
+                void main() {
+                    vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
+                    gl_PointSize = size;
+                    gl_Position = projectionMatrix * mvPosition;
+                    
+                    // Fade in from middle (y=0) to top
+                    // Position is in world space, stars are at r ~ 800-1000
+                    // Normalize Y to 0-1 range for the gradient
+                    float yNorm = clamp(position.y / 1000.0, 0.0, 1.0);
+                    vOpacity = pow(yNorm, 1.5); // Sharper gradient
+                }
+            `,
+            fragmentShader: `
+                uniform float opacity;
+                varying float vOpacity;
+                void main() {
+                    gl_FragColor = vec4(1.0, 1.0, 1.0, opacity * vOpacity);
+                }
+            `
         });
 
         const starPoints = new THREE.Points(starGeometry, starMaterial);
@@ -261,7 +291,8 @@
             elevation: 1.8,
             azimuth: 192.1,
             exposure: 0.34,
-            ozone: 0.64
+            ozone: 0.64,
+            manualTime: null
         };
 
         function updateSky() {
@@ -647,14 +678,30 @@
             updateSky();
         }, 'azimuth-val');
 
+        const timeSlider = document.getElementById('time-slider');
+        const timeVal = document.getElementById('time-val');
+        const resetTimeBtn = document.getElementById('reset-time');
+
+        timeSlider.addEventListener('input', (e) => {
+            const val = parseFloat(e.target.value);
+            skyParams.manualTime = val;
+            const h = Math.floor(val);
+            const m = Math.floor((val % 1) * 60);
+            timeVal.textContent = `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}`;
+        });
+
+        resetTimeBtn.addEventListener('click', () => {
+            skyParams.manualTime = null;
+            timeVal.textContent = 'Real-time';
+        });
+
         updateSky();
 
         window.addEventListener('resize', () => {
-            const size = Math.min(window.innerWidth, window.innerHeight * 0.9);
-            camera.aspect = 1;
+            camera.aspect = window.innerWidth / window.innerHeight;
             camera.updateProjectionMatrix();
-            renderer.setSize(size, size);
-            finalComposer.setSize(size, size);
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            finalComposer.setSize(window.innerWidth, window.innerHeight);
         });
 
         const clock = new THREE.Clock();
@@ -664,8 +711,14 @@
         renderer.domElement.addEventListener('click', () => {
             timeDisplayTimer = TIME_DISPLAY_DURATION;
             const now = new Date();
-            const h = now.getHours();
-            const m = now.getMinutes();
+            let h, m;
+            if (skyParams.manualTime !== null) {
+                h = Math.floor(skyParams.manualTime);
+                m = Math.floor((skyParams.manualTime % 1) * 60);
+            } else {
+                h = now.getHours();
+                m = now.getMinutes();
+            }
             cloudMaterial.uniforms.digits.value.set(
                 Math.floor(h / 10), h % 10,
                 Math.floor(m / 10), m % 10
@@ -689,7 +742,13 @@
 
             // Sun Position
             const now = new Date();
-            const hourFloat = now.getHours() + now.getMinutes() / 60 + now.getSeconds() / 3600;
+            let hourFloat;
+            
+            if (skyParams.manualTime !== null) {
+                hourFloat = skyParams.manualTime;
+            } else {
+                hourFloat = now.getHours() + now.getMinutes() / 60 + now.getSeconds() / 3600;
+            }
             
             if (sunData.isReal) {
                 const dayLength = sunData.sunset - sunData.sunrise;
@@ -728,20 +787,29 @@
             if (skyParams.elevation < 0) {
                 starOpacity = Math.min(1, Math.abs(skyParams.elevation) / 2);
             }
-            starMaterial.opacity = starOpacity;
+            starMaterial.uniforms.opacity.value = starOpacity;
             if (starOpacity > 0) {
-                starMaterial.size = 0.8 + Math.sin(elapsedTime * 4) * 0.2;
+                starMaterial.uniforms.size.value = 0.8 + Math.sin(elapsedTime * 4) * 0.2;
             }
 
             // Clock Hands
-            const hours = now.getHours() % 12;
-            const minutes = now.getMinutes();
-            const seconds = now.getSeconds();
-            const milliseconds = now.getMilliseconds();
+            let h_val, m_val, s_val, ms_val;
+            if (skyParams.manualTime !== null) {
+                h_val = Math.floor(skyParams.manualTime) % 12;
+                m_val = (skyParams.manualTime % 1) * 60;
+                s_val = (m_val % 1) * 60;
+                ms_val = 0;
+                m_val = Math.floor(m_val);
+            } else {
+                h_val = now.getHours() % 12;
+                m_val = now.getMinutes();
+                s_val = now.getSeconds();
+                ms_val = now.getMilliseconds();
+            }
 
-            const secAngle = ((seconds + milliseconds / 1000) / 60) * Math.PI * 2;
-            const minAngle = ((minutes + seconds / 60) / 60) * Math.PI * 2;
-            const hourAngle = ((hours + minutes / 60) / 12) * Math.PI * 2;
+            const secAngle = ((s_val + ms_val / 1000) / 60) * Math.PI * 2;
+            const minAngle = ((m_val + s_val / 60) / 60) * Math.PI * 2;
+            const hourAngle = ((h_val + m_val / 60) / 12) * Math.PI * 2;
 
             const r = torusRadius;
             secSphere.position.set(r * Math.sin(secAngle), r * Math.cos(secAngle), 0);
