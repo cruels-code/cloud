@@ -723,14 +723,18 @@
                 if (numberSprites[i-1]) {
                     numberSprites[i-1].material.map.dispose();
                     numberSprites[i-1].material.map = texture;
+                    numberSprites[i-1].material.depthWrite = false;
                     numberSprites[i-1].material.needsUpdate = true;
                 } else {
                     const spriteMaterial = new THREE.SpriteMaterial({ 
                         map: texture,
                         transparent: true,
-                        opacity: 0
+                        opacity: 0,
+                        depthWrite: false,
+                        depthTest: true
                     });
                     const sprite = new THREE.Sprite(spriteMaterial);
+                    sprite.visible = false;
                     sprite.scale.set(0.6, 0.6, 1);
                     const angle = (i / 12) * Math.PI * 2 - Math.PI / 2;
                     sprite.position.set(
@@ -990,6 +994,7 @@
             const currentOpacity = cloudMaterial.uniforms.timeMode.value;
             numberSprites.forEach(sprite => {
                 sprite.material.opacity = currentOpacity;
+                sprite.visible = currentOpacity > 0.001;
             });
 
             // Sun Position
