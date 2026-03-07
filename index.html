@@ -38,6 +38,11 @@
         line-height: 2;
         text-transform: uppercase;
     ">
+        <div style="font-size: 8px; margin-bottom: 20px; opacity: 0.7;">
+            Allow location to sync local sunrise/sunset times<br>
+            Default is 12 hrs - 6am and 6pm<br>
+            (No data is collected or stored)
+        </div>
         [F] TOGGLE <u>F</u>IREFLIES<br>
         [O] TOGGLE CLOCK <u>O</u>RBS<br>
         [T] TOGGLE 12/24H <u>T</u>IME FORMAT<br>
@@ -634,8 +639,8 @@
 
                         cloudColor *= exposure;
                         
-                        float alpha = density * mix(0.25, 0.5, timeMode); 
-                        alpha = mix(alpha, density * 0.75, digitGlowMask);
+                        float alpha = density * mix(0.6, 0.8, timeMode); 
+                        alpha = mix(alpha, density * 0.9, digitGlowMask);
                         color.rgb += (1.0 - color.a) * cloudColor * alpha;
                         color.a += (1.0 - color.a) * alpha;
                     }
@@ -696,6 +701,54 @@
         const torus = new THREE.Mesh(torusGeometry, torusMaterial);
         torus.rotation.z = Math.PI / 2;
         scene.add(torus);
+
+        // Clock Face Numbers
+        const clockNumbersGroup = new THREE.Group();
+        const numberRadius = torusRadius * 1.15;
+        const numberSprites = [];
+
+        function updateNumberSprites() {
+            for (let i = 1; i <= 12; i++) {
+                const canvas = document.createElement('canvas');
+                canvas.width = 128;
+                canvas.height = 128;
+                const ctx = canvas.getContext('2d');
+                ctx.font = 'Bold 80px "Poiret One", cursive';
+                ctx.fillStyle = '#00ffff';
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                ctx.fillText(i.toString(), 64, 64);
+                
+                const texture = new THREE.CanvasTexture(canvas);
+                if (numberSprites[i-1]) {
+                    numberSprites[i-1].material.map.dispose();
+                    numberSprites[i-1].material.map = texture;
+                    numberSprites[i-1].material.needsUpdate = true;
+                } else {
+                    const spriteMaterial = new THREE.SpriteMaterial({ 
+                        map: texture,
+                        transparent: true,
+                        opacity: 0
+                    });
+                    const sprite = new THREE.Sprite(spriteMaterial);
+                    sprite.scale.set(0.6, 0.6, 1);
+                    const angle = (i / 12) * Math.PI * 2 - Math.PI / 2;
+                    sprite.position.set(
+                        Math.cos(angle) * numberRadius,
+                        -Math.sin(angle) * numberRadius,
+                        0
+                    );
+                    clockNumbersGroup.add(sprite);
+                    numberSprites.push(sprite);
+                }
+            }
+        }
+
+        updateNumberSprites();
+        if (document.fonts) {
+            document.fonts.ready.then(updateNumberSprites);
+        }
+        scene.add(clockNumbersGroup);
 
         // Clock Spheres
         const hourSphereGeom = new THREE.SphereGeometry(0.15, 32, 32);
@@ -932,6 +985,12 @@
             } else {
                 cloudMaterial.uniforms.timeMode.value = Math.max(0, cloudMaterial.uniforms.timeMode.value - dt * 2);
             }
+
+            // Update clock face numbers opacity
+            const currentOpacity = cloudMaterial.uniforms.timeMode.value;
+            numberSprites.forEach(sprite => {
+                sprite.material.opacity = currentOpacity;
+            });
 
             // Sun Position
             const now = new Date();
