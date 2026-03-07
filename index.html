@@ -68,7 +68,10 @@
         import { UnrealBloomPass } from 'https://esm.sh/three@0.160.0/examples/jsm/postprocessing/UnrealBloomPass.js';
 
         // Scene Setup
-        const scene = new THREE.Scene();
+        const skyScene = new THREE.Scene();
+        const cloudScene = new THREE.Scene();
+        const foregroundScene = new THREE.Scene();
+        const scene = foregroundScene; // Keep 'scene' as alias for foreground for compatibility
 
         // Sun Data State
         let sunData = {
@@ -127,14 +130,6 @@
         const controls = new OrbitControls(camera, renderer.domElement);
         controls.enableDamping = true;
         controls.dampingFactor = 0.05;
-
-        // Post-Processing
-        const renderScene = new RenderPass(scene, camera);
-        const bloomPass = new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 0.22, 1.00, 0.99);
-        
-        const finalComposer = new EffectComposer(renderer);
-        finalComposer.addPass(renderScene);
-        finalComposer.addPass(bloomPass);
 
         // Star System
         const starGeometry = new THREE.BufferGeometry();
@@ -209,7 +204,7 @@
 
         const starPoints = new THREE.Points(starGeometry, starMaterial);
         starPoints.renderOrder = -1;
-        scene.add(starPoints);
+        skyScene.add(starPoints);
 
         // Physical Sky
         const sky = new Sky();
@@ -227,7 +222,7 @@
                 'float sundisk = 0.0;'
             );
         };
-        scene.add(sky);
+        skyScene.add(sky);
 
         const sun = new THREE.Vector3();
         const skyParams = {
@@ -684,7 +679,32 @@
 
         const cloudVolume = new THREE.Mesh(geometry, cloudMaterial);
         cloudVolume.renderOrder = 1;
-        scene.add(cloudVolume);
+
+        // Low-Resolution Cloud Rendering Setup
+        cloudScene.add(cloudVolume);
+
+        const cloudRT = new THREE.WebGLRenderTarget(
+            window.innerWidth * 0.5,
+            window.innerHeight * 0.5,
+            {
+                minFilter: THREE.LinearFilter,
+                magFilter: THREE.LinearFilter,
+                format: THREE.RGBAFormat,
+                type: THREE.HalfFloatType // Better precision for HDR/Bloom
+            }
+        );
+
+        const cloudQuadCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+        const cloudQuadScene = new THREE.Scene();
+        const cloudQuadMaterial = new THREE.MeshBasicMaterial({
+            map: cloudRT.texture,
+            transparent: true,
+            blending: THREE.NormalBlending,
+            depthWrite: false,
+            depthTest: false
+        });
+        const cloudQuad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), cloudQuadMaterial);
+        cloudQuadScene.add(cloudQuad);
 
         // Glowing Torus
         const outerRadius = 4.0;
@@ -700,7 +720,7 @@
         });
         const torus = new THREE.Mesh(torusGeometry, torusMaterial);
         torus.rotation.z = Math.PI / 2;
-        scene.add(torus);
+        foregroundScene.add(torus);
 
         // Clock Face Numbers
         const clockNumbersGroup = new THREE.Group();
@@ -752,7 +772,7 @@
         if (document.fonts) {
             document.fonts.ready.then(updateNumberSprites);
         }
-        scene.add(clockNumbersGroup);
+        foregroundScene.add(clockNumbersGroup);
 
         // Clock Spheres
         const hourSphereGeom = new THREE.SphereGeometry(0.15, 32, 32);
@@ -768,9 +788,9 @@
         minSphere.material.color.multiplyScalar(10);
         secSphere.material.color.multiplyScalar(10);
 
-        scene.add(hourSphere);
-        scene.add(minSphere);
-        scene.add(secSphere);
+        foregroundScene.add(hourSphere);
+        foregroundScene.add(minSphere);
+        foregroundScene.add(secSphere);
 
         // Firefly System
         const fireflyCount = 12;
@@ -864,7 +884,7 @@
 
         const fireflyPoints = new THREE.Points(fireflyGeometry, fireflyMaterial);
         fireflyPoints.renderOrder = 2;
-        scene.add(fireflyPoints);
+        foregroundScene.add(fireflyPoints);
 
         // Shooting Star System
         let lastShootingStarCheck = 0;
@@ -885,7 +905,7 @@
         });
         const shootingStar = new THREE.Line(shootingStarGeom, shootingStarMat);
         shootingStar.visible = false;
-        scene.add(shootingStar);
+        foregroundScene.add(shootingStar);
 
         let shootingStarActive = false;
         let shootingStarStartTime = 0;
@@ -924,13 +944,6 @@
 
         updateSky();
 
-        window.addEventListener('resize', () => {
-            camera.aspect = window.innerWidth / window.innerHeight;
-            camera.updateProjectionMatrix();
-            renderer.setSize(window.innerWidth, window.innerHeight);
-            finalComposer.setSize(window.innerWidth, window.innerHeight);
-        });
-
         const clock = new THREE.Clock();
         let timeDisplayTimer = 0;
         const TIME_DISPLAY_DURATION = 4;
@@ -952,6 +965,33 @@
             } else if (key === 't') {
                 skyParams.is24HourFormat = !skyParams.is24HourFormat;
             }
+        });
+
+        // Post-Processing
+        const skyPass = new RenderPass(skyScene, camera);
+        
+        const cloudPass = new RenderPass(cloudQuadScene, cloudQuadCamera);
+        cloudPass.clear = false; // Don't clear sky
+        
+        const foregroundPass = new RenderPass(foregroundScene, camera);
+        foregroundPass.clear = false; // Don't clear sky and cloud
+        
+        const bloomPass = new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 0.22, 1.00, 0.99);
+        
+        const finalComposer = new EffectComposer(renderer);
+        finalComposer.addPass(skyPass);
+        finalComposer.addPass(cloudPass);
+        finalComposer.addPass(foregroundPass);
+        finalComposer.addPass(bloomPass);
+
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            finalComposer.setSize(window.innerWidth, window.innerHeight);
+            
+            // Resize low-res cloud target
+            cloudRT.setSize(window.innerWidth * 0.5, window.innerHeight * 0.5);
         });
 
         // Animation Loop
@@ -1213,6 +1253,14 @@
             hourSphere.position.set(r * Math.sin(hourAngle), r * Math.cos(hourAngle), 0);
 
             controls.update();
+            
+            // 1. Render cloud to low-res target
+            renderer.setRenderTarget(cloudRT);
+            renderer.setClearColor(0x000000, 0);
+            renderer.clear();
+            renderer.render(cloudScene, camera);
+            renderer.setRenderTarget(null);
+
             finalComposer.render();
         }
         animate();
